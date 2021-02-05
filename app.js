@@ -4,6 +4,7 @@ const app = express()
 const logger = require('./utils/logger')
 const mongoose = require('mongoose')
 const usersRouter = require('./controllers/users')
+const loginRouter = require('./controllers/login')
 const middleware = require('./utils/middleware')
 
 //DB connection
@@ -17,11 +18,13 @@ mongoose.connect(config.MONGODB_URI, {
   .then(() => logger.info('connected to mongoDB'))
   .catch(error => logger.error('error connecting MongoDB:', error))
 
-//express settings
+//middleware
 app.use(express.json())
 app.use(middleware.requestLogger)
+app.use(middleware.tokenExtractor)
 
 //routes
+app.use('/api/login', loginRouter)
 app.use('/api/users', usersRouter)
 if (process.env.NODE_ENV !== 'production') {
   const testingRouter = require('./controllers/tests')

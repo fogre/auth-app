@@ -1,18 +1,24 @@
+const config = require('../utils/config')
+const jwt = require('jsonwebtoken')
 const bcrypt = require('bcrypt')
 const usersRouter = require('express').Router()
 const User = require('../models/user')
 
-usersRouter.get('/', async (req, res) => {
-  const users = await User.find({})
-  res.json(users.map(user => user.toJSON()))
-})
+const validateToken = req => {
+  const decodedToken = jwt.verify(req.token, config.JWTSECRET)
+  if (decodedToken.id !== req.params.id) {
+    throw({ name: 'UnauthorizedError' })
+  }
+  return decodedToken
+}
 
 usersRouter.get('/:id', async (req, res) => {
   const user = await User.findById(req.params.id)
-  if (user)
+  if (user) {
     res.json(user.toJSON())
-  else
+  } else {
     res.status(404).end()
+  }
 })
 
 usersRouter.post('/', async (req, res, next) => {
@@ -41,17 +47,45 @@ usersRouter.post('/', async (req, res, next) => {
 })
 
 usersRouter.put('/:id', async (req, res, next) => {
-  const user = {
-    name: req.body.name || null,
-    phone: req.body.phone || null,
-    bio: req.body.bio || null,
-    //photo:
-  }
-
   try {
-    const updatedUser = await User
-      .findByIdAndUpdate(req.params.id, user, { new: true })
-    res.json(updatedUser.toJSON())
+    const decodedToken = validateToken(req)
+    const user = await User.findById(decodedToken.id)
+    const keys = ['email', 'name', 'phone', 'bio']
+
+    if (req.body.password) {
+      user.passwordHash = await bcrypt.hash(req.body.password, 10)
+    }
+    keys.forEach(k => {
+      if (req.body[k]) {
+        user[k] = req.body[k]
+      }
+    })
+
+    await user.save()
+    res.json(user.toJSON())
+  } catch (e) {
+    next(e)
+  }
+})
+
+usersRouter.put(':/id/photo', async (req, res, next) => {
+  try {
+    const decodedToken = validateToken(req)
+    const user = await User.findById(decodedToken.id)
+    user.photo = req.body.photo
+
+    await user.save()
+    res.json(user.photo)
+  } catch (e) {
+    next(e)
+  }
+})
+
+usersRouter.delete('/:id', async (req, res, next) => {
+  try {
+    const decodedToken = validateToken(req)
+    await User.findByIdAndRemove(decodedToken.id)
+    res.status(204).end()
   } catch (e) {
     next(e)
   }
