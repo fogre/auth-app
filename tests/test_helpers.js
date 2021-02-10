@@ -2,6 +2,19 @@ const bcrypt = require('bcrypt')
 const jwt = require('jsonwebtoken')
 const User = require('../models/user')
 
+const avatarsApiPost = (api, id, code, image, user) => {
+  return api.post(`/api/avatar/${id}`)
+    .set(generateAuthHeader(user))
+    .attach('userImg', image)
+    .expect(code)
+}
+
+const avatarsApiDelete = (api, id, code, user) => {
+  return api.delete(`/api/avatar/${id}`)
+    .set(generateAuthHeader(user))
+    .expect(code)
+}
+
 const deleteDB = api => {
   return api
     .post('/api/tests/reset')
@@ -69,6 +82,8 @@ const usersApiDelete = (api, id, code, user = null) => {
 }
 
 module.exports = {
+  avatarsApiPost,
+  avatarsApiDelete,
   deleteDB,
   generateUser,
   loginApiPost,

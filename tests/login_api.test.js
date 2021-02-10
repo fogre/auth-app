@@ -4,7 +4,7 @@ const app = require('../app')
 const helpers = require('./test_helpers')
 const api = supertest(app)
 
-const user = { email: 'e@mail.com', password: 'sekrett' }
+const user = { email: 'login@mail.com', password: 'sekrett' }
 
 beforeAll( async () => {
   await helpers.deleteDB(api)
