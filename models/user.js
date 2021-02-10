@@ -17,7 +17,10 @@ const userSchema = mongoose.Schema({
   name: String,
   phone: String,
   bio: String,
-  photo: { data: Buffer, contentType: String }
+  avatar: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Avatar'
+  }
 })
 
 userSchema.set('toJSON', {

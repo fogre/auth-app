@@ -12,6 +12,8 @@ const errorHandler = (error, req, res, next) => {
     return res.status(401).json({ error: 'invalid token' })
   case 'UnauthorizedError':
     return res.status(401).json({ error: 'unauthorized' })
+  case 'CloudinaryError':
+    return res.status(400).json({ error: error.message })
   default:
     next(error)
   }

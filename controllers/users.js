@@ -13,7 +13,10 @@ const validateToken = req => {
 }
 
 usersRouter.get('/:id', async (req, res) => {
-  const user = await User.findById(req.params.id)
+  const user = await User
+    .findById(req.params.id)
+    .populate('avatar')
+
   if (user) {
     res.json(user.toJSON())
   } else {
@@ -40,7 +43,7 @@ usersRouter.post('/', async (req, res, next) => {
 
   try {
     const savedUser = await user.save()
-    res.json(savedUser)
+    res.json(savedUser.toJSON())
   } catch (e) {
     next(e)
   }
@@ -55,6 +58,7 @@ usersRouter.put('/:id', async (req, res, next) => {
     if (req.body.password) {
       user.passwordHash = await bcrypt.hash(req.body.password, 10)
     }
+
     keys.forEach(k => {
       if (req.body[k]) {
         user[k] = req.body[k]
@@ -63,19 +67,6 @@ usersRouter.put('/:id', async (req, res, next) => {
 
     await user.save()
     res.json(user.toJSON())
-  } catch (e) {
-    next(e)
-  }
-})
-
-usersRouter.put(':/id/photo', async (req, res, next) => {
-  try {
-    const decodedToken = validateToken(req)
-    const user = await User.findById(decodedToken.id)
-    user.photo = req.body.photo
-
-    await user.save()
-    res.json(user.photo)
   } catch (e) {
     next(e)
   }

@@ -9,7 +9,14 @@ if (process.env.NODE_ENV !== 'production') {
   MONGODB_URI = process.env.TEST_MONGODB_URI
 }
 
+let CLOUDINARY_CONF = {
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+}
+
 module.exports = {
+  CLOUDINARY_CONF,
   JWTSECRET,
   MONGODB_URI,
   PORT
