@@ -1,8 +1,10 @@
 const config = require('../utils/config')
 const jwt = require('jsonwebtoken')
 const bcrypt = require('bcrypt')
-const usersRouter = require('express').Router()
+const cloud = require('../utils/cloudStorage')
+const Avatar = require('../models/avatar')
 const User = require('../models/user')
+const usersRouter = require('express').Router()
 
 const validateToken = req => {
   const decodedToken = jwt.verify(req.token, config.JWTSECRET)
@@ -31,17 +33,16 @@ usersRouter.post('/', async (req, res, next) => {
     })
   }
 
-  const passwordHash = await bcrypt.hash(req.body.password, 10)
-  const user = new User({
-    email: req.body.email,
-    name: null,
-    phone: null,
-    bio: null,
-    photo: null,
-    passwordHash
-  })
-
   try {
+    const passwordHash = await bcrypt.hash(req.body.password, 10)
+    const user = new User({
+      email: req.body.email,
+      name: null,
+      phone: null,
+      bio: null,
+      passwordHash
+    })
+
     const savedUser = await user.save()
     res.json(savedUser.toJSON())
   } catch (e) {
@@ -75,6 +76,15 @@ usersRouter.put('/:id', async (req, res, next) => {
 usersRouter.delete('/:id', async (req, res, next) => {
   try {
     const decodedToken = validateToken(req)
+    const user = await User
+      .findById(decodedToken.id)
+      .populate('avatar')
+
+    if (user.avatar) {
+      await cloud.destroy(user.avatar.cloudinaryId)
+      await Avatar.findByIdAndRemove(user.avatar._id)
+    }
+
     await User.findByIdAndRemove(decodedToken.id)
     res.status(204).end()
   } catch (e) {

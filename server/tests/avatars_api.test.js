@@ -55,7 +55,7 @@ describe('When uploading avatar, user can', () => {
     expect(res.body.url).toBeDefined()
     expect(res.body.id).toBeDefined()
     expect(res.body.cloudinaryV).not.toEqual(oldAvatar.cloudinaryV)
-    expect(res.body.url).not.toEqual(oldAvatar.url)
+    expect(res.body.url).not.toMatch(oldAvatar.url)
   })
 
   test('delete avatar when logged in', async () => {

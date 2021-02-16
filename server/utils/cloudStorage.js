@@ -4,6 +4,7 @@ const config = require('./config')
 
 cloudinary.config(config.CLOUDINARY_CONF)
 
+//If ID replace the old avatar image with upload
 const options = id =>  {
   const sharedOptions = {
     format: 'png',
@@ -29,6 +30,7 @@ const callback = (resolve, reject, error, result) => {
   }
 }
 
+//Stream the image buffer to cloudinary image hosting
 const upload = (file, id = null) => {
   return new Promise((resolve, reject) => {
     const cloudUpload = cloudinary.uploader.upload_stream(
@@ -41,6 +43,7 @@ const upload = (file, id = null) => {
   })
 }
 
+//Delete image from cloudinary
 const destroy = id => {
   return new Promise((resolve, reject) => {
     cloudinary.uploader.destroy(

@@ -59,7 +59,7 @@ avatarsRouter.delete('/:id', async (req, res, next) => {
 
     await cloud.destroy(user.avatar.cloudinaryId)
     await Avatar.findByIdAndRemove(user.avatar._id)
-    user.avatar = null
+    user.avatar = undefined
     await user.save()
     res.status(204).end()
   } catch(e) {

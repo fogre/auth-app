@@ -22,8 +22,6 @@ const errorHandler = (error, req, res, next) => {
 const requestLogger = (req, res, next) => {
   logger.info('Method:', req.method)
   logger.info('Path:  ', req.path)
-  if (req.path === '/api/blogs')
-    logger.info('Body:  ', req.body)
   logger.info('---')
   next()
 }
