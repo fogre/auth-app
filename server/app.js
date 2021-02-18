@@ -1,5 +1,6 @@
 const config = require('./utils/config')
 const express = require('express')
+const path = require('path')
 const app = express()
 const logger = require('./utils/logger')
 const mongoose = require('mongoose')
@@ -20,6 +21,7 @@ mongoose.connect(config.MONGODB_URI, {
   .catch(error => logger.error('error connecting MongoDB:', error))
 
 //middleware
+app.use(express.static(path.resolve(__dirname, '../frontend/build')))
 app.use(express.json())
 app.use(middleware.requestLogger)
 app.use(middleware.tokenExtractor)
