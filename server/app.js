@@ -1,4 +1,5 @@
 const config = require('./utils/config')
+const cors = require('cors')
 const express = require('express')
 const path = require('path')
 const app = express()
@@ -21,6 +22,7 @@ mongoose.connect(config.MONGODB_URI, {
   .catch(error => logger.error('error connecting MongoDB:', error))
 
 //middleware
+app.use(cors())
 app.use(express.static(path.resolve(__dirname, '../frontend/build')))
 app.use(express.json())
 app.use(middleware.requestLogger)

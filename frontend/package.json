@@ -2,41 +2,36 @@
   "name": "authapp-frontend",
   "version": "0.1.0",
   "private": true,
+  "scripts": {
+    "build": "webpack",
+    "dev": "webpack serve --hot",
+    "lint": "eslint ."
+  },
   "dependencies": {
-    "@testing-library/jest-dom": "^5.11.9",
-    "@testing-library/react": "^11.2.5",
-    "@testing-library/user-event": "^12.7.1",
+    "axios": "^0.21.1",
     "react": "^17.0.1",
     "react-dom": "^17.0.1",
-    "react-scripts": "4.0.2",
-    "web-vitals": "^1.1.0"
+    "react-router-dom": "^5.2.0",
+    "styled-components": "^5.2.1"
   },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
-    "eject": "react-scripts eject"
-  },
-  "eslintConfig": {
-    "extends": [
-      "react-app",
-      "react-app/jest"
-    ]
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version",
-      "last 1 firefox version",
-      "last 1 safari version"
-    ]
-  },
-  "resolutions": {
-    "jest": "26.6.3"
-  },
-  "proxy": "http://localhost:3001"
+  "devDependencies": {
+    "@babel/core": "^7.12.17",
+    "@babel/plugin-transform-runtime": "^7.13.6",
+    "@babel/preset-env": "^7.12.17",
+    "@babel/preset-react": "^7.12.13",
+    "babel-eslint": "^10.1.0",
+    "babel-loader": "^8.2.2",
+    "babel-plugin-inline-react-svg": "^2.0.0",
+    "babel-plugin-styled-components": "^1.12.0",
+    "css-loader": "^5.0.2",
+    "eslint": "^7.20.0",
+    "eslint-loader": "^4.0.2",
+    "eslint-plugin-react": "7.21.5",
+    "html-loader": "^2.0.0",
+    "html-webpack-plugin": "^5.1.0",
+    "style-loader": "^2.0.0",
+    "webpack": "^5.23.0",
+    "webpack-cli": "^4.5.0",
+    "webpack-dev-server": "^3.11.2"
+  }
 }

@@ -23,7 +23,6 @@ loginRouter.post('/', async (req, res, next) => {
   const user = await User.findOne({
     email: req.body.email
   })
-
   const passwordCorrect = user === null
     ? false
     : await bcrypt.compare(req.body.password, user.passwordHash)
@@ -71,6 +70,7 @@ loginRouter.get('/github', githubCallback, async (req, res, next) => {
     const newUser = await new User({
       email: gitUser.email
     }).save()
+    
     signUser(res, newUser, next)
   }
 })
