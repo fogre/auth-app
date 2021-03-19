@@ -31,7 +31,7 @@ app.use('/public', express.static(
 app.use(express.json())
 app.use(middleware.requestLogger)
 app.use(middleware.tokenExtractor)
-app.use(helmet({
+/*app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
@@ -44,7 +44,7 @@ app.use(helmet({
       ],
     }
   }
-}))
+}))*/
 
 //routes
 app.use('/api/login', loginRouter)
