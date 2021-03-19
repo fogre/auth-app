@@ -8,6 +8,9 @@
   "scripts": {
     "start": "NODE_ENV=production node server",
     "dev": "NODE_ENV=development nodemon --ignore 'frontend/' server",
+    "build:ui": "cd frontend && npm run build",
+    "heroku": "git push heroku main",
+    "deploy": "npm run build:ui && git add . && git commit -m deploy && git push && npm run heroku",
     "lint": "eslint './server'",
     "test": "NODE_ENV=test jest --verbose --runInBand"
   },
@@ -24,6 +27,7 @@
     "cors": "^2.8.5",
     "dotenv": "^8.2.0",
     "express": "^4.17.1",
+    "helmet": "^4.4.1",
     "jsonwebtoken": "^8.5.1",
     "mongoose": "^5.11.14",
     "mongoose-unique-validator": "^2.0.3",

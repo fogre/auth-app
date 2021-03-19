@@ -10,7 +10,7 @@ const options = id =>  {
     format: 'png',
     allowed_formats: ['jpg', 'png'],
     transformation: [
-      { width: 120, height: 120, gravity: 'face', crop: 'crop' } 
+      { width: 120, height: 120, gravity: 'face', crop: 'crop' }
     ]
   }
 

@@ -2,6 +2,7 @@ const config = require('./utils/config')
 const cors = require('cors')
 const express = require('express')
 const path = require('path')
+const helmet = require('helmet')
 const app = express()
 const logger = require('./utils/logger')
 const mongoose = require('mongoose')
@@ -24,9 +25,25 @@ mongoose.connect(config.MONGODB_URI, {
 //middleware
 app.use(cors())
 app.use(express.static(path.resolve(__dirname, '../frontend/build')))
+app.use('/public', express.static(
+  path.resolve(__dirname, '../frontend/public')
+))
 app.use(express.json())
 app.use(middleware.requestLogger)
 app.use(middleware.tokenExtractor)
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'font-src': ['fonts.gstatic.com'],
+      'img-src': [
+        "'self'", // eslint-disable-line quotes
+        'avatars.githubusercontent.com',
+        'res.cloudinary.com/auth-app-images/'
+      ],
+    }
+  }
+}))
 
 //routes
 app.use('/api/login', loginRouter)
@@ -36,9 +53,8 @@ if (process.env.NODE_ENV !== 'production') {
   const testingRouter = require('./controllers/tests')
   app.use('/api/tests', testingRouter)
 }
-
-app.get('*', (req,res) =>{
-  res.sendFile(path.resolve(__dirname, '../frontend/build/index.html'));
+app.get('*', (req,res) => {
+  res.sendFile(path.resolve(__dirname, '../frontend/build/index.html'))
 })
 
 //errorhandling

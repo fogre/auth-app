@@ -60,7 +60,7 @@ usersRouter.put('/:id', async (req, res, next) => {
 usersRouter.delete('/:id', async (req, res, next) => {
   try {
     const user = await validation.validateAndFindUserByID(req)
-    
+
     if (user.avatar.cloudinaryId) {
       await cloud.destroy(user.avatar.cloudinaryId)
     }

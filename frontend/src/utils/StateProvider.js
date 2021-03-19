@@ -124,7 +124,11 @@ const Provider = props => {
         photo: res.data.avatar.url
       })
     } catch (e) {
-      console.log(e.response)
+      setError(errorTypeSetter({
+        type: 'general',
+        error: 'Image upload failed'
+      }))
+      history.push('/')
     }
   }
 

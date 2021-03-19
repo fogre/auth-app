@@ -32,7 +32,6 @@ const gitLogin = async code => {
   return res.data.user
 }
 
-
 const loginPost = async (url, credentials) => {
   const res = await axios.post(url, credentials)
   setLoggedUser(res.data)
@@ -48,7 +47,7 @@ const put = async (url, id, data) => {
   return res.data
 }
 
-const imagePost = (img, id) => {
+const imagePost = async (img, id) => {
   const newConfig = {
     headers: {
       Authorization: `bearer ${token}`,
@@ -57,7 +56,12 @@ const imagePost = (img, id) => {
   }
   const formData = new FormData()
   formData.append('userImg', img)
-  return axios.post(`${avatarURL}/${id}`, formData, newConfig)
+  const res = await axios.post(`${avatarURL}/${id}`, formData, newConfig)
+  setLoggedUser({
+    user: res.data,
+    token,
+  })
+  return res
 }
 
 export default {
