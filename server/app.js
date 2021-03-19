@@ -37,6 +37,10 @@ if (process.env.NODE_ENV !== 'production') {
   app.use('/api/tests', testingRouter)
 }
 
+app.get('*', (req,res) =>{
+  res.sendFile(path.resolve(__dirname, '../frontend/build/index.html'));
+})
+
 //errorhandling
 app.use(middleware.unknownEndpoint)
 app.use(middleware.errorHandler)

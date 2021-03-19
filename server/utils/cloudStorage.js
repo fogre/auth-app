@@ -8,7 +8,10 @@ cloudinary.config(config.CLOUDINARY_CONF)
 const options = id =>  {
   const sharedOptions = {
     format: 'png',
-    allowed_formats: ['jpg', 'png']
+    allowed_formats: ['jpg', 'png'],
+    transformation: [
+      { width: 120, height: 120, gravity: 'face', crop: 'crop' } 
+    ]
   }
 
   if (id) return {

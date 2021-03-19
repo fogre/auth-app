@@ -16,7 +16,9 @@ describe('When logging in', () => {
   test('an user with right credentials can log in', async () => {
     const result = await helpers.loginApiPost(api, 200, user)
     expect(result.body.token).toBeDefined()
-    expect(result.body.email).toBeDefined()
+    expect(result.body.user.email).toBeDefined()
+    expect(result.body.user.id).toBeDefined()
+    expect(result.body.user.passwordHash).not.toBeDefined()
   })
 
   test('wrong credentials result in error', async () => {

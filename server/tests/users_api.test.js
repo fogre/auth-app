@@ -16,8 +16,9 @@ beforeAll(async () => {
 describe('A new user can', () => {
   test('be created with valid email and password', async () => {
     const resultUser = await helpers.usersApiPost(api, 200, newUser)
-    expect(resultUser.body.id).toBeDefined()
-    expect(resultUser.body.passwordHash).not.toBeDefined()
+    expect(resultUser.body.user.id).toBeDefined()
+    expect(resultUser.body.user.email).toBeDefined()
+    expect(resultUser.body.user.passwordHash).not.toBeDefined()
   })
 
   test('not be created if user already exists', async () => {

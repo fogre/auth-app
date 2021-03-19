@@ -1,23 +1,10 @@
-const config = require('../utils/config')
-const jwt = require('jsonwebtoken')
-const bcrypt = require('bcrypt')
 const cloud = require('../utils/cloudStorage')
-const Avatar = require('../models/avatar')
+const validation = require('../utils/jwtValidation')
 const User = require('../models/user')
 const usersRouter = require('express').Router()
 
-const validateToken = req => {
-  const decodedToken = jwt.verify(req.token, config.JWTSECRET)
-  if (decodedToken.id !== req.params.id) {
-    throw({ name: 'UnauthorizedError' })
-  }
-  return decodedToken
-}
-
 usersRouter.get('/:id', async (req, res) => {
-  const user = await User
-    .findById(req.params.id)
-    .populate('avatar')
+  const user = await User.findById(req.params.id)
 
   if (user) {
     res.json(user.toJSON())
@@ -27,24 +14,20 @@ usersRouter.get('/:id', async (req, res) => {
 })
 
 usersRouter.post('/', async (req, res, next) => {
-  if (!req.body.password || req.body.password.length <= 5) {
-    return res.status(400).json({
-      error: 'password too short or not provided'
-    })
-  }
-
   try {
-    const passwordHash = await bcrypt.hash(req.body.password, 10)
-    const user = new User({
+    if (!req.body.email) {
+      return res.status(400).json({ error: 'email is required', type: 'email' })
+    }
+    const passwordHash = await validation.validateNewPassword(req.body.password)
+    const user = await new User({
       email: req.body.email,
       name: null,
       phone: null,
       bio: null,
       passwordHash
-    })
+    }).save()
 
-    const savedUser = await user.save()
-    res.json(savedUser.toJSON())
+    validation.signUser(res, user)
   } catch (e) {
     next(e)
   }
@@ -52,17 +35,18 @@ usersRouter.post('/', async (req, res, next) => {
 
 usersRouter.put('/:id', async (req, res, next) => {
   try {
-    const decodedToken = validateToken(req)
-    const user = await User.findById(decodedToken.id)
+    const user = await validation.validateAndFindUserByID(req)
     const keys = ['email', 'name', 'phone', 'bio']
 
     if (req.body.password) {
-      user.passwordHash = await bcrypt.hash(req.body.password, 10)
+      user.passwordHash = await validation.validateNewPassword(req.body.password)
     }
 
     keys.forEach(k => {
       if (req.body[k]) {
         user[k] = req.body[k]
+      } else if (user[k]) {
+        user[k] = null
       }
     })
 
@@ -75,17 +59,13 @@ usersRouter.put('/:id', async (req, res, next) => {
 
 usersRouter.delete('/:id', async (req, res, next) => {
   try {
-    const decodedToken = validateToken(req)
-    const user = await User
-      .findById(decodedToken.id)
-      .populate('avatar')
-
-    if (user.avatar) {
+    const user = await validation.validateAndFindUserByID(req)
+    
+    if (user.avatar.cloudinaryId) {
       await cloud.destroy(user.avatar.cloudinaryId)
-      await Avatar.findByIdAndRemove(user.avatar._id)
     }
 
-    await User.findByIdAndRemove(decodedToken.id)
+    await User.findByIdAndRemove(user._id)
     res.status(204).end()
   } catch (e) {
     next(e)

@@ -1,50 +1,31 @@
-const config = require('../utils/config')
-const jwt = require('jsonwebtoken')
 const multer = require('multer')
-const Avatar = require('../models/avatar')
-const User = require('../models/user')
-const avatarsRouter = require('express').Router()
 const cloud = require('../utils/cloudStorage')
+const validation = require('../utils/jwtValidation')
 const imageUpload = multer()
-
-const validateToken = req => {
-  const decodedToken = jwt.verify(req.token, config.JWTSECRET)
-  if (decodedToken.id !== req.params.id) {
-    throw({ name: 'UnauthorizedError' })
-  }
-  return decodedToken
-}
+const avatarsRouter = require('express').Router()
 
 avatarsRouter.post('/:id', imageUpload.single('userImg'), async (req, res, next) => {
   try {
-    const decodedToken = validateToken(req)
-    const user = await User
-      .findById(decodedToken.id)
-      .populate('avatar')
+    const user = await validation.validateAndFindUserByID(req)
 
-    let upload = null
-    let avatar = null
+    if (user.avatar.cloudinaryId) {
+      const upload = await cloud.upload(req.file, user.avatar.cloudinaryId)
+      user.avatar.cloudinaryV = upload.version
+      user.avatar.url = upload.url
+      await user.save()
 
-    if (user.avatar) {
-      avatar = user.avatar
-      upload = await cloud.upload(req.file, avatar.cloudinaryId)
-      avatar.cloudinaryV = upload.version
-      avatar.url = upload.url
-      await avatar.save()
     }	else {
-      upload = await cloud.upload(req.file)
-      avatar = await new Avatar({
+      const upload = await cloud.upload(req.file)
+      const avatar = {
         cloudinaryId: upload.public_id,
         cloudinaryV: upload.version,
-        url: upload.url,
-        user: user._id
-      }).save()
-
-      user.avatar = avatar._id
+        url: upload.url
+      }
+      user.avatar = avatar
       await user.save()
     }
 
-    res.json(avatar.toJSON())
+    res.json(user.toJSON())
   } catch (e) {
     next(e)
   }
@@ -52,13 +33,8 @@ avatarsRouter.post('/:id', imageUpload.single('userImg'), async (req, res, next)
 
 avatarsRouter.delete('/:id', async (req, res, next) => {
   try {
-    const decodedToken = validateToken(req)
-    const user = await User
-      .findById(decodedToken.id)
-      .populate('avatar')
-
+    const user = await validation.validateAndFindUserByID(req)
     await cloud.destroy(user.avatar.cloudinaryId)
-    await Avatar.findByIdAndRemove(user.avatar._id)
     user.avatar = undefined
     await user.save()
     res.status(204).end()

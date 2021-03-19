@@ -5,22 +5,23 @@ const emailRegex = /^(([^<>()[\]\.,;:\s@\"]+(\.[^<>()[\]\.,;:\s@\"]+)*)|(\".+\")
 /*eslint-enable */
 
 const userSchema = mongoose.Schema({
+  name: String,
+  bio: String,
+  phone: String,
   email: {
     type: String,
     trim: true,
     lowercase: true,
-    required: [true, 'Email required'],
     unique: true,
-    match: [emailRegex, 'Please enter valid email']
+    match: [emailRegex, 'Please enter valid email address']
   },
-  passwordHash: String,
-  name: String,
-  phone: String,
-  bio: String,
   avatar: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Avatar'
-  }
+    cloudinaryId: String,
+    cloudinaryV: Number,
+    url: String,
+  },
+  githubAccount: String,
+  passwordHash: String
 })
 
 userSchema.set('toJSON', {
@@ -28,10 +29,14 @@ userSchema.set('toJSON', {
     returnedObj.id = returnedObj._id.toString()
     delete returnedObj._id
     delete returnedObj.__v
+    delete returnedObj.githubAccount
     delete returnedObj.passwordHash
   }
 })
-userSchema.plugin(uniqueValidator)
+userSchema.plugin(
+  uniqueValidator,
+  { message: 'An account for {VALUE} already exists' }
+)
 const User = mongoose.model('User', userSchema)
 
 module.exports = User

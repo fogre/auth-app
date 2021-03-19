@@ -1,29 +1,32 @@
-import React, { useState } from 'react'
-import services from '../utils/services'
-import { handleChange } from '../utils/formFunctions'
-import { StyledError, StyledInput, StyledSubmit } from '../styles/mixins'
+import React, { useState, useContext } from 'react'
+import styled from 'styled-components'
+import { AppState } from '../../utils/StateProvider'
+import { handleChange } from '../../utils/formFunctions'
+import { StyledError, StyledInput, StyledSubmit } from '../../styles/mixins'
 
-const LoginForm = props => {
-  const [error, setError] = useState(null)
+const LoginInput = styled(StyledInput)`
+  background-image: ${props => `url(${props.background})`};
+  background-repeat: no-repeat;
+  background-position: 3% 45%;
+  background-size: 1.5em;
+  text-indent: 1.7em;
+`
+const LoginForm = () => {
+  const { error, login } = useContext(AppState)
   const [credentials, setCredentials] = useState({
     email: '',
     password: ''
   })
 
   const handleSubmit = async e => {
-    try {
-      e.preventDefault()
-      const user = await services.login(credentials)
-      props.login(user)
-    } catch (e) {
-      setError(e.response.data.error)
-    }
+    e.preventDefault()
+    login(credentials)
   }
 
   return (
     <form onSubmit={e => handleSubmit(e)}>
-      {error && <StyledError>{error}</StyledError>}
-      <StyledInput
+      {error.login && <StyledError>{error.login}</StyledError>}
+      <LoginInput
         type='text'
         name='email'
         value={credentials.email}
@@ -31,7 +34,7 @@ const LoginForm = props => {
         placeholder={'Email'}
         background={'/public/email.svg'}
       />
-      <StyledInput
+      <LoginInput
         type='password'
         name='password'
         value={credentials.password}

@@ -1,39 +1,29 @@
 const axios = require('axios')
 const bcrypt = require('bcrypt')
-const jwt = require('jsonwebtoken')
 const config = require('../utils/config')
+const validation = require('../utils/jwtValidation')
 const User = require('../models/user')
 const loginRouter = require('express').Router()
 
-const signUser = (res, user, next) => {
+loginRouter.post('/', async (req, res, next) => {
   try {
-    const userForToken = {
-      email: user.email,
-      id: user._id
+    const user = await User.findOne({ email: req.body.email })
+
+    const passwordCorrect = user === null
+      ? false
+      : await bcrypt.compare(req.body.password, user.passwordHash)
+
+    if (!(user && passwordCorrect)) {
+      return res.status(401).json({
+        error: 'invalid username or password',
+        type: 'login'
+      })
     }
 
-    const token = jwt.sign(userForToken, config.JWTSECRET)
-    res.status(200).send({ token, email: user.email, id: user.id })
+    validation.signUser(res, user, next)
   } catch (e) {
     next(e)
   }
-}
-
-loginRouter.post('/', async (req, res, next) => {
-  const user = await User.findOne({
-    email: req.body.email
-  })
-  const passwordCorrect = user === null
-    ? false
-    : await bcrypt.compare(req.body.password, user.passwordHash)
-
-  if (!(user && passwordCorrect)) {
-    return res.status(401).json({
-      error: 'invalid username or password'
-    })
-  }
-
-  signUser(res, user, next)
 })
 
 //callback middleware function called by github after logging in
@@ -46,32 +36,43 @@ const githubCallback = async (req, res, next) => {
   })
 
   if (gitRes.data.error) {
+    console.log(gitRes.data.error)
     return res.status(401).json({
-      error: 'github authentication failed'
+      error: 'github authentication failed',
+      type: 'general'
     })
   }
   req.github = gitRes.data
   next()
 }
 
-loginRouter.get('/github', githubCallback, async (req, res, next) => {
-  console.log('coming here')
-  const gitUser = await axios({
-    methrod: 'get',
-    url: 'https://api.github.com/user',
-    headers: { Authorization: `token ${req.github.access_token}` }
-  })
+loginRouter.get('/github/login', githubCallback, async (req, res, next) => {
+  try {
+    const gitUser = await axios({
+      methrod: 'get',
+      url: 'https://api.github.com/user',
+      headers: { Authorization: `token ${req.github.access_token}` }
+    })
 
-  const user = await User.findOne({ email: gitUser.email })
+    const gitLogin = gitUser.data.login
+    const user = await User.findOne({ githubAccount: gitLogin })
 
-  if (user._id) {
-    signUser(res, user, next)
-  } else {
-    const newUser = await new User({
-      email: gitUser.email
-    }).save()
-    
-    signUser(res, newUser, next)
+    if (user && user._id) {
+      validation.signUser(res, user, next)
+    } else {
+      console.log('creating new')
+      const newUser = await new User({
+        email: gitUser.data.email,
+        avatar: { url: gitUser.data['avatar_url'] },
+        bio: gitUser.data.bio,
+        name: gitUser.data.name,
+        githubAccount: gitLogin
+      }).save()
+
+      validation.signUser(res, newUser, next)
+    }
+  } catch (e) {
+    next (e)
   }
 })
 

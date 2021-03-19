@@ -7,13 +7,21 @@ const errorHandler = (error, req, res, next) => {
   case 'CastError':
     return res.status(400).send({ error: 'malformatted id' })
   case 'ValidationError':
-    return res.status(400).json({ error: error.message })
+    return res.status(400).json({
+      error: error.message.substring(31),
+      type: Object.keys(error.errors)[0]
+    })
   case 'JsonWebTokenError':
-    return res.status(401).json({ error: 'invalid token' })
+    return res.status(401).json({ error: 'invalid token', type: 'login' })
   case 'UnauthorizedError':
-    return res.status(401).json({ error: 'unauthorized' })
+    return res.status(401).json({ error: 'unauthorized', type: 'login' })
+  case 'PasswordError':
+    return res.status(400).json({
+      error: 'password too short or not provided',
+      type: 'password'
+    })
   case 'CloudinaryError':
-    return res.status(400).json({ error: error.message })
+    return res.status(400).json({ error: error.message, type: 'general' })
   default:
     next(error)
   }
