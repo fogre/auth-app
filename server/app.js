@@ -31,11 +31,10 @@ app.use('/public', express.static(
 app.use(express.json())
 app.use(middleware.requestLogger)
 app.use(middleware.tokenExtractor)
-/*app.use(helmet({
+app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-      'default-src': ["'self"], // eslint-disable-line quotes
       'font-src': ['fonts.gstatic.com'],
       'img-src': [
         "'self'", // eslint-disable-line quotes
@@ -44,7 +43,7 @@ app.use(middleware.tokenExtractor)
       ],
     }
   }
-}))*/
+}))
 
 //routes
 app.use('/api/login', loginRouter)
