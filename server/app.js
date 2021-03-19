@@ -35,6 +35,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'default-src': ["'self", 'authappdevchallenge.herokuapp.com'], // eslint-disable-line quotes
       'font-src': ['fonts.gstatic.com'],
       'img-src': [
         "'self'", // eslint-disable-line quotes
