@@ -54,12 +54,13 @@ This application/site was created as a submission to a [DevChallenges](https://d
 
 ## How To Use
 
-To clone and run this application, you'll need [Git](https://git-scm.com) and [Node.js](https://nodejs.org/en/download/) (which comes with [npm](http://npmjs.com)) installed on your computer. From your command line:
+To clone and run this application, you'll need [Git](https://git-scm.com) and [Node.js](https://nodejs.org/en/download/) (which comes with [npm](http://npmjs.com)) installed on your computer.
 
 You need to create accounts to [MonboDB Altas](https://www.mongodb.com/) and [Cloudinary](https://cloudinary.com).
 
 Create an .env file at the root directory with the API keys. Please look .env-public file for guide.
 
+From your command line:
 ```bash
 # Clone this repository
 $ git clone https://github.com/fogre/auth-app
@@ -82,6 +83,7 @@ $ npm run dev
 - [MonboDB Altas](https://www.mongodb.com/)
 - [Mongoose](https://mongoosejs.com/)
 - [Cloudinary](https://cloudinary.com)
+- [Material.io](https://material.io/)
 - [Stack Overflow ;)](https://stackoverflow.com/)
 
 ## Contact
