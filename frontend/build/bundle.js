@@ -1144,6 +1144,7 @@ module.exports = function xhrAdapter(config) {
   return new Promise(function dispatchXhrRequest(resolve, reject) {
     var requestData = config.data;
     var requestHeaders = config.headers;
+    var responseType = config.responseType;
 
     if (utils.isFormData(requestData)) {
       delete requestHeaders['Content-Type']; // Let the browser set it
@@ -1164,23 +1165,14 @@ module.exports = function xhrAdapter(config) {
     // Set the request timeout in MS
     request.timeout = config.timeout;
 
-    // Listen for ready state
-    request.onreadystatechange = function handleLoad() {
-      if (!request || request.readyState !== 4) {
+    function onloadend() {
+      if (!request) {
         return;
       }
-
-      // The request errored out and we didn't get a response, this will be
-      // handled by onerror instead
-      // With one exception: request that using file: protocol, most browsers
-      // will return status as 0 even though it's a successful request
-      if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {
-        return;
-      }
-
       // Prepare the response
       var responseHeaders = 'getAllResponseHeaders' in request ? parseHeaders(request.getAllResponseHeaders()) : null;
-      var responseData = !config.responseType || config.responseType === 'text' ? request.responseText : request.response;
+      var responseData = !responseType || responseType === 'text' ||  responseType === 'json' ?
+        request.responseText : request.response;
       var response = {
         data: responseData,
         status: request.status,
@@ -1194,7 +1186,30 @@ module.exports = function xhrAdapter(config) {
 
       // Clean up request
       request = null;
-    };
+    }
+
+    if ('onloadend' in request) {
+      // Use onloadend if available
+      request.onloadend = onloadend;
+    } else {
+      // Listen for ready state to emulate onloadend
+      request.onreadystatechange = function handleLoad() {
+        if (!request || request.readyState !== 4) {
+          return;
+        }
+
+        // The request errored out and we didn't get a response, this will be
+        // handled by onerror instead
+        // With one exception: request that using file: protocol, most browsers
+        // will return status as 0 even though it's a successful request
+        if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {
+          return;
+        }
+        // readystate handler is calling before onerror or ontimeout handlers,
+        // so we should call onloadend on the next 'tick'
+        setTimeout(onloadend);
+      };
+    }
 
     // Handle browser request cancellation (as opposed to a manual cancellation)
     request.onabort = function handleAbort() {
@@ -1224,7 +1239,10 @@ module.exports = function xhrAdapter(config) {
       if (config.timeoutErrorMessage) {
         timeoutErrorMessage = config.timeoutErrorMessage;
       }
-      reject(createError(timeoutErrorMessage, config, 'ECONNABORTED',
+      reject(createError(
+        timeoutErrorMessage,
+        config,
+        config.transitional && config.transitional.clarifyTimeoutError ? 'ETIMEDOUT' : 'ECONNABORTED',
         request));
 
       // Clean up request
@@ -1264,16 +1282,8 @@ module.exports = function xhrAdapter(config) {
     }
 
     // Add responseType to request if needed
-    if (config.responseType) {
-      try {
-        request.responseType = config.responseType;
-      } catch (e) {
-        // Expected DOMException thrown by browsers not compatible XMLHttpRequest Level 2.
-        // But, this can be suppressed for 'json' type as it can be parsed by default 'transformResponse' function.
-        if (config.responseType !== 'json') {
-          throw e;
-        }
-      }
+    if (responseType && responseType !== 'json') {
+      request.responseType = config.responseType;
     }
 
     // Handle progress if needed
@@ -1507,7 +1517,9 @@ var buildURL = __webpack_require__(/*! ../helpers/buildURL */ "./node_modules/ax
 var InterceptorManager = __webpack_require__(/*! ./InterceptorManager */ "./node_modules/axios/lib/core/InterceptorManager.js");
 var dispatchRequest = __webpack_require__(/*! ./dispatchRequest */ "./node_modules/axios/lib/core/dispatchRequest.js");
 var mergeConfig = __webpack_require__(/*! ./mergeConfig */ "./node_modules/axios/lib/core/mergeConfig.js");
+var validator = __webpack_require__(/*! ../helpers/validator */ "./node_modules/axios/lib/helpers/validator.js");
 
+var validators = validator.validators;
 /**
  * Create a new instance of Axios
  *
@@ -1547,20 +1559,71 @@ Axios.prototype.request = function request(config) {
     config.method = 'get';
   }
 
-  // Hook up interceptors middleware
-  var chain = [dispatchRequest, undefined];
-  var promise = Promise.resolve(config);
+  var transitional = config.transitional;
 
+  if (transitional !== undefined) {
+    validator.assertOptions(transitional, {
+      silentJSONParsing: validators.transitional(validators.boolean, '1.0.0'),
+      forcedJSONParsing: validators.transitional(validators.boolean, '1.0.0'),
+      clarifyTimeoutError: validators.transitional(validators.boolean, '1.0.0')
+    }, false);
+  }
+
+  // filter out skipped interceptors
+  var requestInterceptorChain = [];
+  var synchronousRequestInterceptors = true;
   this.interceptors.request.forEach(function unshiftRequestInterceptors(interceptor) {
-    chain.unshift(interceptor.fulfilled, interceptor.rejected);
+    if (typeof interceptor.runWhen === 'function' && interceptor.runWhen(config) === false) {
+      return;
+    }
+
+    synchronousRequestInterceptors = synchronousRequestInterceptors && interceptor.synchronous;
+
+    requestInterceptorChain.unshift(interceptor.fulfilled, interceptor.rejected);
   });
 
+  var responseInterceptorChain = [];
   this.interceptors.response.forEach(function pushResponseInterceptors(interceptor) {
-    chain.push(interceptor.fulfilled, interceptor.rejected);
+    responseInterceptorChain.push(interceptor.fulfilled, interceptor.rejected);
   });
 
-  while (chain.length) {
-    promise = promise.then(chain.shift(), chain.shift());
+  var promise;
+
+  if (!synchronousRequestInterceptors) {
+    var chain = [dispatchRequest, undefined];
+
+    Array.prototype.unshift.apply(chain, requestInterceptorChain);
+    chain = chain.concat(responseInterceptorChain);
+
+    promise = Promise.resolve(config);
+    while (chain.length) {
+      promise = promise.then(chain.shift(), chain.shift());
+    }
+
+    return promise;
+  }
+
+
+  var newConfig = config;
+  while (requestInterceptorChain.length) {
+    var onFulfilled = requestInterceptorChain.shift();
+    var onRejected = requestInterceptorChain.shift();
+    try {
+      newConfig = onFulfilled(newConfig);
+    } catch (error) {
+      onRejected(error);
+      break;
+    }
+  }
+
+  try {
+    promise = dispatchRequest(newConfig);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  while (responseInterceptorChain.length) {
+    promise = promise.then(responseInterceptorChain.shift(), responseInterceptorChain.shift());
   }
 
   return promise;
@@ -1622,10 +1685,12 @@ function InterceptorManager() {
  *
  * @return {Number} An ID used to remove interceptor later
  */
-InterceptorManager.prototype.use = function use(fulfilled, rejected) {
+InterceptorManager.prototype.use = function use(fulfilled, rejected, options) {
   this.handlers.push({
     fulfilled: fulfilled,
-    rejected: rejected
+    rejected: rejected,
+    synchronous: options ? options.synchronous : false,
+    runWhen: options ? options.runWhen : null
   });
   return this.handlers.length - 1;
 };
@@ -1758,7 +1823,8 @@ module.exports = function dispatchRequest(config) {
   config.headers = config.headers || {};
 
   // Transform request data
-  config.data = transformData(
+  config.data = transformData.call(
+    config,
     config.data,
     config.headers,
     config.transformRequest
@@ -1784,7 +1850,8 @@ module.exports = function dispatchRequest(config) {
     throwIfCancellationRequested(config);
 
     // Transform response data
-    response.data = transformData(
+    response.data = transformData.call(
+      config,
       response.data,
       response.headers,
       config.transformResponse
@@ -1797,7 +1864,8 @@ module.exports = function dispatchRequest(config) {
 
       // Transform response data
       if (reason && reason.response) {
-        reason.response.data = transformData(
+        reason.response.data = transformData.call(
+          config,
           reason.response.data,
           reason.response.headers,
           config.transformResponse
@@ -2009,6 +2077,7 @@ module.exports = function settle(resolve, reject, response) {
 
 
 var utils = __webpack_require__(/*! ./../utils */ "./node_modules/axios/lib/utils.js");
+var defaults = __webpack_require__(/*! ./../defaults */ "./node_modules/axios/lib/defaults.js");
 
 /**
  * Transform the data for a request or a response
@@ -2019,9 +2088,10 @@ var utils = __webpack_require__(/*! ./../utils */ "./node_modules/axios/lib/util
  * @returns {*} The resulting transformed data
  */
 module.exports = function transformData(data, headers, fns) {
+  var context = this || defaults;
   /*eslint no-param-reassign:0*/
   utils.forEach(fns, function transform(fn) {
-    data = fn(data, headers);
+    data = fn.call(context, data, headers);
   });
 
   return data;
@@ -2041,6 +2111,7 @@ module.exports = function transformData(data, headers, fns) {
 
 var utils = __webpack_require__(/*! ./utils */ "./node_modules/axios/lib/utils.js");
 var normalizeHeaderName = __webpack_require__(/*! ./helpers/normalizeHeaderName */ "./node_modules/axios/lib/helpers/normalizeHeaderName.js");
+var enhanceError = __webpack_require__(/*! ./core/enhanceError */ "./node_modules/axios/lib/core/enhanceError.js");
 
 var DEFAULT_CONTENT_TYPE = {
   'Content-Type': 'application/x-www-form-urlencoded'
@@ -2064,12 +2135,35 @@ function getDefaultAdapter() {
   return adapter;
 }
 
+function stringifySafely(rawValue, parser, encoder) {
+  if (utils.isString(rawValue)) {
+    try {
+      (parser || JSON.parse)(rawValue);
+      return utils.trim(rawValue);
+    } catch (e) {
+      if (e.name !== 'SyntaxError') {
+        throw e;
+      }
+    }
+  }
+
+  return (encoder || JSON.stringify)(rawValue);
+}
+
 var defaults = {
+
+  transitional: {
+    silentJSONParsing: true,
+    forcedJSONParsing: true,
+    clarifyTimeoutError: false
+  },
+
   adapter: getDefaultAdapter(),
 
   transformRequest: [function transformRequest(data, headers) {
     normalizeHeaderName(headers, 'Accept');
     normalizeHeaderName(headers, 'Content-Type');
+
     if (utils.isFormData(data) ||
       utils.isArrayBuffer(data) ||
       utils.isBuffer(data) ||
@@ -2086,20 +2180,32 @@ var defaults = {
       setContentTypeIfUnset(headers, 'application/x-www-form-urlencoded;charset=utf-8');
       return data.toString();
     }
-    if (utils.isObject(data)) {
-      setContentTypeIfUnset(headers, 'application/json;charset=utf-8');
-      return JSON.stringify(data);
+    if (utils.isObject(data) || (headers && headers['Content-Type'] === 'application/json')) {
+      setContentTypeIfUnset(headers, 'application/json');
+      return stringifySafely(data);
     }
     return data;
   }],
 
   transformResponse: [function transformResponse(data) {
-    /*eslint no-param-reassign:0*/
-    if (typeof data === 'string') {
+    var transitional = this.transitional;
+    var silentJSONParsing = transitional && transitional.silentJSONParsing;
+    var forcedJSONParsing = transitional && transitional.forcedJSONParsing;
+    var strictJSONParsing = !silentJSONParsing && this.responseType === 'json';
+
+    if (strictJSONParsing || (forcedJSONParsing && utils.isString(data) && data.length)) {
       try {
-        data = JSON.parse(data);
-      } catch (e) { /* Ignore */ }
+        return JSON.parse(data);
+      } catch (e) {
+        if (strictJSONParsing) {
+          if (e.name === 'SyntaxError') {
+            throw enhanceError(e, this, 'E_JSON_PARSE');
+          }
+          throw e;
+        }
+      }
     }
+
     return data;
   }],
 
@@ -2582,6 +2688,122 @@ module.exports = function spread(callback) {
 
 /***/ }),
 
+/***/ "./node_modules/axios/lib/helpers/validator.js":
+/*!*****************************************************!*\
+  !*** ./node_modules/axios/lib/helpers/validator.js ***!
+  \*****************************************************/
+/***/ ((module, __unused_webpack_exports, __webpack_require__) => {
+
+"use strict";
+
+
+var pkg = __webpack_require__(/*! ./../../package.json */ "./node_modules/axios/package.json");
+
+var validators = {};
+
+// eslint-disable-next-line func-names
+['object', 'boolean', 'number', 'function', 'string', 'symbol'].forEach(function(type, i) {
+  validators[type] = function validator(thing) {
+    return typeof thing === type || 'a' + (i < 1 ? 'n ' : ' ') + type;
+  };
+});
+
+var deprecatedWarnings = {};
+var currentVerArr = pkg.version.split('.');
+
+/**
+ * Compare package versions
+ * @param {string} version
+ * @param {string?} thanVersion
+ * @returns {boolean}
+ */
+function isOlderVersion(version, thanVersion) {
+  var pkgVersionArr = thanVersion ? thanVersion.split('.') : currentVerArr;
+  var destVer = version.split('.');
+  for (var i = 0; i < 3; i++) {
+    if (pkgVersionArr[i] > destVer[i]) {
+      return true;
+    } else if (pkgVersionArr[i] < destVer[i]) {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Transitional option validator
+ * @param {function|boolean?} validator
+ * @param {string?} version
+ * @param {string} message
+ * @returns {function}
+ */
+validators.transitional = function transitional(validator, version, message) {
+  var isDeprecated = version && isOlderVersion(version);
+
+  function formatMessage(opt, desc) {
+    return '[Axios v' + pkg.version + '] Transitional option \'' + opt + '\'' + desc + (message ? '. ' + message : '');
+  }
+
+  // eslint-disable-next-line func-names
+  return function(value, opt, opts) {
+    if (validator === false) {
+      throw new Error(formatMessage(opt, ' has been removed in ' + version));
+    }
+
+    if (isDeprecated && !deprecatedWarnings[opt]) {
+      deprecatedWarnings[opt] = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        formatMessage(
+          opt,
+          ' has been deprecated since v' + version + ' and will be removed in the near future'
+        )
+      );
+    }
+
+    return validator ? validator(value, opt, opts) : true;
+  };
+};
+
+/**
+ * Assert object's properties type
+ * @param {object} options
+ * @param {object} schema
+ * @param {boolean?} allowUnknown
+ */
+
+function assertOptions(options, schema, allowUnknown) {
+  if (typeof options !== 'object') {
+    throw new TypeError('options must be an object');
+  }
+  var keys = Object.keys(options);
+  var i = keys.length;
+  while (i-- > 0) {
+    var opt = keys[i];
+    var validator = schema[opt];
+    if (validator) {
+      var value = options[opt];
+      var result = value === undefined || validator(value, opt, options);
+      if (result !== true) {
+        throw new TypeError('option ' + opt + ' must be ' + result);
+      }
+      continue;
+    }
+    if (allowUnknown !== true) {
+      throw Error('Unknown option ' + opt);
+    }
+  }
+}
+
+module.exports = {
+  isOlderVersion: isOlderVersion,
+  assertOptions: assertOptions,
+  validators: validators
+};
+
+
+/***/ }),
+
 /***/ "./node_modules/axios/lib/utils.js":
 /*!*****************************************!*\
   !*** ./node_modules/axios/lib/utils.js ***!
@@ -2592,8 +2814,6 @@ module.exports = function spread(callback) {
 
 
 var bind = __webpack_require__(/*! ./helpers/bind */ "./node_modules/axios/lib/helpers/bind.js");
-
-/*global toString:true*/
 
 // utils is a library of generic helper functions non-specific to axios
 
@@ -2778,7 +2998,7 @@ function isURLSearchParams(val) {
  * @returns {String} The String freed of excess whitespace
  */
 function trim(str) {
-  return str.replace(/^\s*/, '').replace(/\s*$/, '');
+  return str.trim ? str.trim() : str.replace(/^\s+|\s+$/g, '');
 }
 
 /**
@@ -2941,6 +3161,17 @@ module.exports = {
   stripBOM: stripBOM
 };
 
+
+/***/ }),
+
+/***/ "./node_modules/axios/package.json":
+/*!*****************************************!*\
+  !*** ./node_modules/axios/package.json ***!
+  \*****************************************/
+/***/ ((module) => {
+
+"use strict";
+module.exports = JSON.parse('{"name":"axios","version":"0.21.4","description":"Promise based HTTP client for the browser and node.js","main":"index.js","scripts":{"test":"grunt test","start":"node ./sandbox/server.js","build":"NODE_ENV=production grunt build","preversion":"npm test","version":"npm run build && grunt version && git add -A dist && git add CHANGELOG.md bower.json package.json","postversion":"git push && git push --tags","examples":"node ./examples/server.js","coveralls":"cat coverage/lcov.info | ./node_modules/coveralls/bin/coveralls.js","fix":"eslint --fix lib/**/*.js"},"repository":{"type":"git","url":"https://github.com/axios/axios.git"},"keywords":["xhr","http","ajax","promise","node"],"author":"Matt Zabriskie","license":"MIT","bugs":{"url":"https://github.com/axios/axios/issues"},"homepage":"https://axios-http.com","devDependencies":{"coveralls":"^3.0.0","es6-promise":"^4.2.4","grunt":"^1.3.0","grunt-banner":"^0.6.0","grunt-cli":"^1.2.0","grunt-contrib-clean":"^1.1.0","grunt-contrib-watch":"^1.0.0","grunt-eslint":"^23.0.0","grunt-karma":"^4.0.0","grunt-mocha-test":"^0.13.3","grunt-ts":"^6.0.0-beta.19","grunt-webpack":"^4.0.2","istanbul-instrumenter-loader":"^1.0.0","jasmine-core":"^2.4.1","karma":"^6.3.2","karma-chrome-launcher":"^3.1.0","karma-firefox-launcher":"^2.1.0","karma-jasmine":"^1.1.1","karma-jasmine-ajax":"^0.1.13","karma-safari-launcher":"^1.0.0","karma-sauce-launcher":"^4.3.6","karma-sinon":"^1.0.5","karma-sourcemap-loader":"^0.3.8","karma-webpack":"^4.0.2","load-grunt-tasks":"^3.5.2","minimist":"^1.2.0","mocha":"^8.2.1","sinon":"^4.5.0","terser-webpack-plugin":"^4.2.3","typescript":"^4.0.5","url-search-params":"^0.10.0","webpack":"^4.44.2","webpack-dev-server":"^3.11.0"},"browser":{"./lib/adapters/http.js":"./lib/adapters/xhr.js"},"jsdelivr":"dist/axios.min.js","unpkg":"dist/axios.min.js","typings":"./index.d.ts","dependencies":{"follow-redirects":"^1.14.0"},"bundlesize":[{"path":"./dist/axios.min.js","threshold":"5kB"}]}');
 
 /***/ }),
 
@@ -3409,7 +3640,7 @@ __webpack_require__.r(__webpack_exports__);
 var ArrowSVG = function ArrowSVG(props) {
   return /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("svg", props, /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
     className: "arrow",
-    d: "M15.41 16.09l-4.58-4.59 4.58-4.59L14 5.5l-6 6 6 6z"
+    d: "m15.41 16.09-4.58-4.59 4.58-4.59L14 5.5l-6 6 6 6z"
   }));
 };
 
@@ -3421,7 +3652,7 @@ ArrowSVG.defaultProps = {
 
 var DropdownSVG = function DropdownSVG(props) {
   return /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("svg", props, /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
-    d: "M5 8l4 4 4-4z"
+    d: "m5 8 4 4 4-4z"
   }));
 };
 
@@ -3434,7 +3665,7 @@ DropdownSVG.defaultProps = {
 var ExitSvg = function ExitSvg(props) {
   return /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("svg", props, /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
     className: "path",
-    d: "M10.09 15.59L11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 0 0-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"
+    d: "M10.09 15.59 11.5 17l5-5-5-5-1.41 1.41L12.67 11H3v2h9.67l-2.58 2.59zM19 3H5a2 2 0 0 0-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"
   }));
 };
 
@@ -3455,7 +3686,7 @@ var GithubSVG = function GithubSVG(props) {
     clipPath: "url(#a)"
   }, /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
     className: "path",
-    d: "M22.285 13.442c-4.943 0-9 4.057-9 9 0 4.218 2.96 8.05 6.891 9v-2.978a2.2 2.2 0 0 1-1.144-.029c-.532-.157-.964-.511-1.285-1.051-.205-.345-.567-.72-.945-.692l-.093-1.05c.818-.07 1.525.498 1.945 1.203.186.314.401.498.677.579.266.078.552.04.885-.077.083-.667.389-.917.62-1.268-2.344-.35-3.279-1.594-3.65-2.576-.49-1.303-.227-2.931.642-3.96.017-.02.047-.073.035-.11-.398-1.203.088-2.199.105-2.304.46.136.535-.137 1.997.752l.253.151c.106.064.073.028.179.02a7.636 7.636 0 0 1 1.888-.266c.64.008 1.28.1 1.915.272l.082.009c-.007-.002.022-.006.072-.035 1.827-1.107 1.761-.745 2.251-.904.018.105.497 1.117.103 2.305-.053.164 1.584 1.663.676 4.07-.37.982-1.305 2.226-3.649 2.575.3.459.662.702.66 1.647v3.717c3.93-.95 6.89-4.782 6.89-9 0-4.943-4.056-9-9-9z",
+    d: "M22.285 13.442c-4.943 0-9 4.057-9 9 0 4.218 2.96 8.05 6.891 9v-2.978a2.2 2.2 0 0 1-1.144-.029c-.532-.157-.964-.511-1.285-1.051-.205-.345-.567-.72-.945-.692l-.093-1.05c.818-.07 1.525.498 1.945 1.203.186.314.401.498.677.579.266.078.552.04.885-.077.083-.667.389-.917.62-1.268-2.344-.35-3.279-1.594-3.65-2.576-.49-1.303-.227-2.931.642-3.96.017-.02.047-.073.035-.11-.398-1.203.088-2.199.105-2.304.46.136.535-.137 1.997.752l.253.151c.106.064.073.028.179.02a7.636 7.636 0 0 1 1.888-.266c.64.008 1.28.1 1.915.272l.082.009c-.007-.002.022-.006.072-.035 1.827-1.107 1.761-.745 2.251-.904.018.105.497 1.117.103 2.305-.053.164 1.584 1.663.676 4.07-.37.982-1.305 2.226-3.649 2.575.3.459.662.702.66 1.647v3.717c3.93-.95 6.89-4.782 6.89-9 0-4.943-4.056-9-9-9Z",
     fill: "#828282"
   })), /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("defs", null, /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("clipPath", {
     id: "a"
@@ -3475,13 +3706,13 @@ GithubSVG.defaultProps = {
 
 var LogoSVG = function LogoSVG(props) {
   return /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("svg", props, /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
-    d: "M41.657 7.672c-.325.35-.487.828-.487 1.437 0 .61.162 1.087.487 1.432.325.346.756.518 1.292.518.52 0 .948-.177 1.285-.53.337-.353.506-.827.506-1.42 0-.601-.169-1.078-.506-1.432-.337-.353-.765-.53-1.285-.53-.536 0-.967.176-1.292.525zM43.87 6.05c.402.267.692.63.871 1.084V3.468h1.706v9.017H44.74v-1.414c-.179.455-.469.82-.871 1.09-.402.273-.888.41-1.456.41a2.9 2.9 0 0 1-1.536-.415c-.455-.276-.81-.676-1.066-1.2-.256-.525-.384-1.14-.384-1.847 0-.706.128-1.321.384-1.846.256-.524.611-.924 1.066-1.2a2.9 2.9 0 0 1 1.536-.414c.568 0 1.054.134 1.456.402zM52.192 7.428c-.313-.285-.697-.427-1.152-.427-.463 0-.853.142-1.17.427-.316.284-.491.703-.524 1.255h3.279c.024-.552-.12-.971-.433-1.255zm2.102 2.01h-4.948c.025.602.187 1.044.488 1.329.3.284.674.426 1.12.426.399 0 .73-.097.994-.292.264-.195.433-.46.506-.792h1.816c-.09.471-.28.893-.573 1.267a2.99 2.99 0 0 1-1.127.877 3.61 3.61 0 0 1-1.53.317c-.658 0-1.243-.14-1.755-.42-.511-.28-.91-.68-1.194-1.2-.284-.52-.426-1.134-.426-1.841 0-.706.142-1.321.426-1.846a2.903 2.903 0 0 1 1.194-1.2c.512-.276 1.097-.414 1.755-.414.666 0 1.25.138 1.749.414.5.276.885.656 1.157 1.14.273.483.409 1.033.409 1.65 0 .171-.02.366-.061.585zM58.51 10.767l1.706-5.033h1.828l-2.498 6.751H57.45l-2.498-6.75h1.84l1.718 5.032zM68.204 6.355c.58.471.944 1.113 1.09 1.926H67.48a1.4 1.4 0 0 0-.5-.847c-.26-.207-.589-.31-.987-.31-.455 0-.835.168-1.14.505-.304.337-.456.83-.456 1.48s.152 1.144.457 1.48a1.47 1.47 0 0 0 1.14.507c.397 0 .726-.104.986-.311a1.4 1.4 0 0 0 .5-.847h1.815c-.146.813-.51 1.455-1.09 1.925-.581.471-1.306.707-2.175.707-.659 0-1.243-.14-1.755-.42-.512-.28-.91-.68-1.194-1.2-.285-.52-.427-1.134-.427-1.841 0-.706.142-1.321.427-1.846a2.904 2.904 0 0 1 1.194-1.2c.512-.276 1.096-.414 1.755-.414.87 0 1.594.236 2.175.706zM76.399 6.404c.463.512.694 1.232.694 2.158v3.923h-1.705V8.757c0-.537-.139-.953-.415-1.25-.276-.296-.654-.444-1.133-.444-.488 0-.877.158-1.17.475-.292.316-.439.772-.439 1.365v3.582h-1.718V3.468h1.718v3.619c.179-.455.473-.81.883-1.066.41-.256.885-.384 1.42-.384.78 0 1.402.256 1.865.767zM80.493 7.672c-.325.35-.487.828-.487 1.437 0 .61.162 1.087.487 1.432.325.346.756.518 1.292.518.52 0 .949-.177 1.286-.53.337-.353.505-.827.505-1.42 0-.601-.168-1.078-.505-1.432-.337-.353-.766-.53-1.286-.53-.536 0-.967.176-1.291.525zm2.218-1.621c.406.267.695.63.865 1.084V5.734h1.706v6.751h-1.706v-1.414c-.17.455-.46.82-.865 1.09-.406.273-.894.41-1.462.41a2.9 2.9 0 0 1-1.536-.415c-.455-.276-.81-.676-1.066-1.2-.256-.525-.384-1.14-.384-1.847 0-.706.128-1.321.384-1.846.256-.524.611-.924 1.066-1.2a2.9 2.9 0 0 1 1.536-.414c.568 0 1.056.134 1.462.402zM88.56 3.468v9.017h-1.718V3.468h1.719zM91.838 3.468v9.017H90.12V3.468h1.718zM97.584 7.428c-.313-.285-.697-.427-1.151-.427-.464 0-.854.142-1.17.427-.317.284-.492.703-.524 1.255h3.277c.025-.552-.12-.971-.432-1.255zm2.102 2.01h-4.947c.024.602.186 1.044.486 1.329.301.284.675.426 1.122.426.398 0 .73-.097.993-.292.264-.195.432-.46.505-.792h1.817c-.09.471-.28.893-.573 1.267a2.993 2.993 0 0 1-1.128.877 3.608 3.608 0 0 1-1.528.317c-.659 0-1.243-.14-1.755-.42a2.95 2.95 0 0 1-1.194-1.2c-.285-.52-.427-1.134-.427-1.841 0-.706.142-1.321.427-1.846a2.899 2.899 0 0 1 1.194-1.2c.512-.276 1.096-.414 1.755-.414.665 0 1.249.138 1.748.414.5.276.886.656 1.157 1.14.273.483.409 1.033.409 1.65 0 .171-.02.366-.061.585zM106.852 6.404c.462.512.694 1.232.694 2.158v3.923h-1.707V8.757c0-.537-.138-.953-.413-1.25-.277-.296-.654-.444-1.134-.444-.487 0-.877.158-1.17.475-.292.316-.438.772-.438 1.365v3.582h-1.719v-6.75h1.719v1.352a2.15 2.15 0 0 1 .883-1.066c.41-.256.883-.384 1.42-.384.779 0 1.401.256 1.865.767zM110.945 7.673c-.325.349-.487.828-.487 1.437 0 .61.162 1.087.487 1.432.325.345.756.518 1.292.518.52 0 .948-.177 1.286-.53.337-.353.506-.827.506-1.42 0-.601-.169-1.079-.506-1.432-.338-.353-.766-.53-1.286-.53-.536 0-.967.175-1.292.525zm2.219-1.621c.406.267.694.63.865 1.084V5.735h1.706v6.775a3.76 3.76 0 0 1-.372 1.688 2.75 2.75 0 0 1-1.109 1.176c-.492.284-1.087.426-1.785.426-.975 0-1.763-.231-2.364-.694-.601-.464-.967-1.094-1.097-1.89h1.693c.098.342.287.607.567.8.281.19.64.286 1.079.286.503 0 .91-.15 1.218-.445.309-.297.464-.746.464-1.347v-1.438a2.224 2.224 0 0 1-.865 1.09c-.407.273-.895.409-1.463.409a2.899 2.899 0 0 1-1.535-.415c-.456-.276-.81-.676-1.066-1.2-.256-.524-.384-1.14-.384-1.846 0-.707.128-1.322.384-1.846s.61-.924 1.066-1.2a2.899 2.899 0 0 1 1.535-.415c.568 0 1.056.134 1.463.403zM121.479 7.429c-.312-.284-.697-.427-1.151-.427-.462 0-.853.143-1.17.427-.317.284-.492.702-.524 1.255h3.278c.025-.553-.12-.97-.433-1.255zm2.103 2.01h-4.948c.024.602.187 1.044.487 1.329.301.284.675.426 1.122.426.397 0 .729-.097.992-.292.264-.195.433-.46.506-.792h1.816c-.089.471-.28.894-.573 1.267a2.976 2.976 0 0 1-1.127.877 3.605 3.605 0 0 1-1.529.317c-.658 0-1.243-.14-1.755-.42a2.957 2.957 0 0 1-1.194-1.2c-.284-.52-.426-1.134-.426-1.84 0-.707.142-1.323.426-1.847a2.915 2.915 0 0 1 1.194-1.2c.512-.276 1.097-.414 1.755-.414.666 0 1.249.138 1.748.414.5.277.886.656 1.158 1.139.272.484.409 1.034.409 1.651 0 .171-.021.366-.061.585zM129.162 6.271c.496.414.805.967.927 1.657h-1.609a1.335 1.335 0 0 0-.439-.78c-.227-.195-.524-.292-.889-.292-.293 0-.52.07-.683.207a.7.7 0 0 0-.244.56.57.57 0 0 0 .195.452c.13.113.293.203.489.268.195.065.475.142.84.231a8.71 8.71 0 0 1 1.249.36c.321.126.598.325.829.597.232.272.347.64.347 1.102 0 .578-.225 1.045-.676 1.402-.451.358-1.058.536-1.822.536-.878 0-1.581-.197-2.108-.591-.529-.394-.85-.956-.963-1.687h1.644c.041.333.188.595.44.785.251.191.581.287.987.287.292 0 .516-.071.67-.213a.72.72 0 0 0 .232-.555.609.609 0 0 0-.202-.475 1.343 1.343 0 0 0-.499-.28 12.266 12.266 0 0 0-.847-.232 9.503 9.503 0 0 1-1.224-.347 1.951 1.951 0 0 1-.805-.567c-.223-.26-.335-.617-.335-1.072 0-.585.223-1.06.67-1.426.447-.366 1.065-.548 1.853-.548.82 0 1.478.207 1.973.621z",
+    d: "M41.657 7.672c-.325.35-.487.828-.487 1.437 0 .61.162 1.087.487 1.432.325.346.756.518 1.292.518.52 0 .948-.177 1.285-.53.337-.353.506-.827.506-1.42 0-.601-.169-1.078-.506-1.432-.337-.353-.765-.53-1.285-.53-.536 0-.967.176-1.292.525ZM43.87 6.05c.402.267.692.63.871 1.084V3.468h1.706v9.017H44.74v-1.414c-.179.455-.469.82-.871 1.09-.402.273-.888.41-1.456.41a2.9 2.9 0 0 1-1.536-.415c-.455-.276-.81-.676-1.066-1.2-.256-.525-.384-1.14-.384-1.847 0-.706.128-1.321.384-1.846.256-.524.611-.924 1.066-1.2a2.9 2.9 0 0 1 1.536-.414c.568 0 1.054.134 1.456.402ZM52.192 7.428c-.313-.285-.697-.427-1.152-.427-.463 0-.853.142-1.17.427-.316.284-.491.703-.524 1.255h3.279c.024-.552-.12-.971-.433-1.255Zm2.102 2.01h-4.948c.025.602.187 1.044.488 1.329.3.284.674.426 1.12.426.399 0 .73-.097.994-.292.264-.195.433-.46.506-.792h1.816c-.09.471-.28.893-.573 1.267a2.99 2.99 0 0 1-1.127.877 3.61 3.61 0 0 1-1.53.317c-.658 0-1.243-.14-1.755-.42-.511-.28-.91-.68-1.194-1.2-.284-.52-.426-1.134-.426-1.841 0-.706.142-1.321.426-1.846a2.903 2.903 0 0 1 1.194-1.2c.512-.276 1.097-.414 1.755-.414.666 0 1.25.138 1.749.414.5.276.885.656 1.157 1.14.273.483.409 1.033.409 1.65 0 .171-.02.366-.061.585ZM58.51 10.767l1.706-5.033h1.828l-2.498 6.751H57.45l-2.498-6.75h1.84l1.718 5.032ZM68.204 6.355c.58.471.944 1.113 1.09 1.926H67.48a1.4 1.4 0 0 0-.5-.847c-.26-.207-.589-.31-.987-.31-.455 0-.835.168-1.14.505-.304.337-.456.83-.456 1.48s.152 1.144.457 1.48a1.47 1.47 0 0 0 1.14.507c.397 0 .726-.104.986-.311a1.4 1.4 0 0 0 .5-.847h1.815c-.146.813-.51 1.455-1.09 1.925-.581.471-1.306.707-2.175.707-.659 0-1.243-.14-1.755-.42-.512-.28-.91-.68-1.194-1.2-.285-.52-.427-1.134-.427-1.841 0-.706.142-1.321.427-1.846a2.904 2.904 0 0 1 1.194-1.2c.512-.276 1.096-.414 1.755-.414.87 0 1.594.236 2.175.706ZM76.399 6.404c.463.512.694 1.232.694 2.158v3.923h-1.705V8.757c0-.537-.139-.953-.415-1.25-.276-.296-.654-.444-1.133-.444-.488 0-.877.158-1.17.475-.292.316-.439.772-.439 1.365v3.582h-1.718V3.468h1.718v3.619c.179-.455.473-.81.883-1.066.41-.256.885-.384 1.42-.384.78 0 1.402.256 1.865.767ZM80.493 7.672c-.325.35-.487.828-.487 1.437 0 .61.162 1.087.487 1.432.325.346.756.518 1.292.518.52 0 .949-.177 1.286-.53.337-.353.505-.827.505-1.42 0-.601-.168-1.078-.505-1.432-.337-.353-.766-.53-1.286-.53-.536 0-.967.176-1.291.525Zm2.218-1.621c.406.267.695.63.865 1.084V5.734h1.706v6.751h-1.706v-1.414c-.17.455-.46.82-.865 1.09-.406.273-.894.41-1.462.41a2.9 2.9 0 0 1-1.536-.415c-.455-.276-.81-.676-1.066-1.2-.256-.525-.384-1.14-.384-1.847 0-.706.128-1.321.384-1.846.256-.524.611-.924 1.066-1.2a2.9 2.9 0 0 1 1.536-.414c.568 0 1.056.134 1.462.402ZM88.56 3.468v9.017h-1.718V3.468h1.719ZM91.838 3.468v9.017H90.12V3.468h1.718ZM97.584 7.428c-.313-.285-.697-.427-1.151-.427-.464 0-.854.142-1.17.427-.317.284-.492.703-.524 1.255h3.277c.025-.552-.12-.971-.432-1.255Zm2.102 2.01h-4.947c.024.602.186 1.044.486 1.329.301.284.675.426 1.122.426.398 0 .73-.097.993-.292.264-.195.432-.46.505-.792h1.817c-.09.471-.28.893-.573 1.267a2.993 2.993 0 0 1-1.128.877 3.608 3.608 0 0 1-1.528.317c-.659 0-1.243-.14-1.755-.42a2.95 2.95 0 0 1-1.194-1.2c-.285-.52-.427-1.134-.427-1.841 0-.706.142-1.321.427-1.846a2.899 2.899 0 0 1 1.194-1.2c.512-.276 1.096-.414 1.755-.414.665 0 1.249.138 1.748.414.5.276.886.656 1.157 1.14.273.483.409 1.033.409 1.65 0 .171-.02.366-.061.585ZM106.852 6.404c.462.512.694 1.232.694 2.158v3.923h-1.707V8.757c0-.537-.138-.953-.413-1.25-.277-.296-.654-.444-1.134-.444-.487 0-.877.158-1.17.475-.292.316-.438.772-.438 1.365v3.582h-1.719v-6.75h1.719v1.352a2.15 2.15 0 0 1 .883-1.066c.41-.256.883-.384 1.42-.384.779 0 1.401.256 1.865.767ZM110.945 7.673c-.325.349-.487.828-.487 1.437 0 .61.162 1.087.487 1.432.325.345.756.518 1.292.518.52 0 .948-.177 1.286-.53.337-.353.506-.827.506-1.42 0-.601-.169-1.079-.506-1.432-.338-.353-.766-.53-1.286-.53-.536 0-.967.175-1.292.525Zm2.219-1.621c.406.267.694.63.865 1.084V5.735h1.706v6.775a3.76 3.76 0 0 1-.372 1.688 2.75 2.75 0 0 1-1.109 1.176c-.492.284-1.087.426-1.785.426-.975 0-1.763-.231-2.364-.694-.601-.464-.967-1.094-1.097-1.89h1.693c.098.342.287.607.567.8.281.19.64.286 1.079.286.503 0 .91-.15 1.218-.445.309-.297.464-.746.464-1.347v-1.438a2.224 2.224 0 0 1-.865 1.09c-.407.273-.895.409-1.463.409a2.899 2.899 0 0 1-1.535-.415c-.456-.276-.81-.676-1.066-1.2-.256-.524-.384-1.14-.384-1.846 0-.707.128-1.322.384-1.846s.61-.924 1.066-1.2a2.899 2.899 0 0 1 1.535-.415c.568 0 1.056.134 1.463.403ZM121.479 7.429c-.312-.284-.697-.427-1.151-.427-.462 0-.853.143-1.17.427-.317.284-.492.702-.524 1.255h3.278c.025-.553-.12-.97-.433-1.255Zm2.103 2.01h-4.948c.024.602.187 1.044.487 1.329.301.284.675.426 1.122.426.397 0 .729-.097.992-.292.264-.195.433-.46.506-.792h1.816c-.089.471-.28.894-.573 1.267a2.976 2.976 0 0 1-1.127.877 3.605 3.605 0 0 1-1.529.317c-.658 0-1.243-.14-1.755-.42a2.957 2.957 0 0 1-1.194-1.2c-.284-.52-.426-1.134-.426-1.84 0-.707.142-1.323.426-1.847a2.915 2.915 0 0 1 1.194-1.2c.512-.276 1.097-.414 1.755-.414.666 0 1.249.138 1.748.414.5.277.886.656 1.158 1.139.272.484.409 1.034.409 1.651 0 .171-.021.366-.061.585ZM129.162 6.271c.496.414.805.967.927 1.657h-1.609a1.335 1.335 0 0 0-.439-.78c-.227-.195-.524-.292-.889-.292-.293 0-.52.07-.683.207a.7.7 0 0 0-.244.56.57.57 0 0 0 .195.452c.13.113.293.203.489.268.195.065.475.142.84.231a8.71 8.71 0 0 1 1.249.36c.321.126.598.325.829.597.232.272.347.64.347 1.102 0 .578-.225 1.045-.676 1.402-.451.358-1.058.536-1.822.536-.878 0-1.581-.197-2.108-.591-.529-.394-.85-.956-.963-1.687h1.644c.041.333.188.595.44.785.251.191.581.287.987.287.292 0 .516-.071.67-.213a.72.72 0 0 0 .232-.555.609.609 0 0 0-.202-.475 1.343 1.343 0 0 0-.499-.28 12.266 12.266 0 0 0-.847-.232 9.503 9.503 0 0 1-1.224-.347 1.951 1.951 0 0 1-.805-.567c-.223-.26-.335-.617-.335-1.072 0-.585.223-1.06.67-1.426.447-.366 1.065-.548 1.853-.548.82 0 1.478.207 1.973.621Z",
     fill: "#282051"
   }), /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
-    d: "M34.71 11.772L23.968 17.48a2.421 2.421 0 0 1-3.28-1.004 2.41 2.41 0 0 1-.178-1.849 2.41 2.41 0 0 1 1.182-1.432l10.742-5.706a2.42 2.42 0 0 1 2.103-.083l.172.091c.428.227.775.573 1.002 1.002l.026.04a2.429 2.429 0 0 1-1.027 3.234zm-33.553-.999c-.005-.01-.013-.02-.02-.03a2.427 2.427 0 0 1 1.021-3.247L12.9 1.79a2.423 2.423 0 0 1 3.456 2.852c-.19.62-.609 1.13-1.18 1.432L4.434 11.781a2.434 2.434 0 0 1-2.103.083l-.173-.092a2.406 2.406 0 0 1-1-.999zm35.326-2.69a3.298 3.298 0 0 0-1.552-1.457L26.86 2.338l-2.129-1.13-.008-.005-.346-.182a3.316 3.316 0 0 0-1.465-.384l-.028-.001-.052-.002h-.01a3.29 3.29 0 0 0-2.701 1.353l-6.948 9.247a.436.436 0 0 0 .697.522l6.951-9.252a2.429 2.429 0 0 1 3.388-.537 2.424 2.424 0 0 1 .541 3.382l-7.415 9.878a3.322 3.322 0 0 0-.144-.855 3.277 3.277 0 0 0-1.606-1.947l-5.906-3.15a.435.435 0 1 0-.409.769l5.907 3.15c.572.304.991.812 1.181 1.432a2.425 2.425 0 0 1-1.33 2.925c-.064.02-.13.038-.198.055a.397.397 0 0 0-.16.072 2.422 2.422 0 0 1-1.769-.2l-7.274-3.864-1.488-.79c.244-.065.48-.156.705-.274l10.742-5.707a3.277 3.277 0 0 0 1.604-1.947 3.279 3.279 0 0 0-.24-2.512 3.291 3.291 0 0 0-4.457-1.363L1.75 6.726a3.3 3.3 0 0 0-1.365 4.458 3.3 3.3 0 0 0 1.552 1.457l.15.08h.002l2.407 1.28 7.996 4.247a3.3 3.3 0 0 0 2.858.114 3.289 3.289 0 0 0 1.603-1.177L25.45 5.868a3.31 3.31 0 0 0 .432-3.062l1.299.689 5.548 2.948c-.244.065-.48.156-.704.275L27.182 9.29l-3.414-1.802a.435.435 0 0 0-.403.773l2.885 1.525-4.967 2.637a3.28 3.28 0 0 0-1.606 1.948 3.272 3.272 0 0 0 .242 2.511 3.291 3.291 0 0 0 4.457 1.365l10.742-5.707a3.301 3.301 0 0 0 1.365-4.458z",
+    d: "M34.71 11.772 23.968 17.48a2.421 2.421 0 0 1-3.28-1.004 2.41 2.41 0 0 1-.178-1.849 2.41 2.41 0 0 1 1.182-1.432l10.742-5.706a2.42 2.42 0 0 1 2.103-.083l.172.091c.428.227.775.573 1.002 1.002l.026.04a2.429 2.429 0 0 1-1.027 3.234Zm-33.553-.999c-.005-.01-.013-.02-.02-.03a2.427 2.427 0 0 1 1.021-3.247L12.9 1.79a2.423 2.423 0 0 1 3.456 2.852c-.19.62-.609 1.13-1.18 1.432L4.434 11.781a2.434 2.434 0 0 1-2.103.083l-.173-.092a2.406 2.406 0 0 1-1-.999Zm35.326-2.69a3.298 3.298 0 0 0-1.552-1.457L26.86 2.338l-2.129-1.13-.008-.005-.346-.182a3.316 3.316 0 0 0-1.465-.384l-.028-.001-.052-.002h-.01a3.29 3.29 0 0 0-2.701 1.353l-6.948 9.247a.436.436 0 0 0 .697.522l6.951-9.252a2.429 2.429 0 0 1 3.388-.537 2.424 2.424 0 0 1 .541 3.382l-7.415 9.878a3.322 3.322 0 0 0-.144-.855 3.277 3.277 0 0 0-1.606-1.947l-5.906-3.15a.435.435 0 1 0-.409.769l5.907 3.15c.572.304.991.812 1.181 1.432a2.425 2.425 0 0 1-1.33 2.925c-.064.02-.13.038-.198.055a.397.397 0 0 0-.16.072 2.422 2.422 0 0 1-1.769-.2l-7.274-3.864-1.488-.79c.244-.065.48-.156.705-.274l10.742-5.707a3.277 3.277 0 0 0 1.604-1.947 3.279 3.279 0 0 0-.24-2.512 3.291 3.291 0 0 0-4.457-1.363L1.75 6.726a3.3 3.3 0 0 0-1.365 4.458 3.3 3.3 0 0 0 1.552 1.457l.15.08h.002l2.407 1.28 7.996 4.247a3.3 3.3 0 0 0 2.858.114 3.289 3.289 0 0 0 1.603-1.177L25.45 5.868a3.31 3.31 0 0 0 .432-3.062l1.299.689 5.548 2.948c-.244.065-.48.156-.704.275L27.182 9.29l-3.414-1.802a.435.435 0 0 0-.403.773l2.885 1.525-4.967 2.637a3.28 3.28 0 0 0-1.606 1.948 3.272 3.272 0 0 0 .242 2.511 3.291 3.291 0 0 0 4.457 1.365l10.742-5.707a3.301 3.301 0 0 0 1.365-4.458Z",
     fill: "#F0402C"
   }), /*#__PURE__*/react__WEBPACK_IMPORTED_MODULE_0__.createElement("path", {
-    d: "M27.181 3.495l-1.299-.689v-.002c-.254-.667-.655-1.296-1.152-1.596l2.129 1.13c.162.368.271.756.322 1.157zM4.496 14l-2.407-1.279c.039.013.663.22 1.312.22.253 0 .51-.032.737-.117l1.488.79a4.079 4.079 0 0 1-1.13.386z",
+    d: "m27.181 3.495-1.299-.689v-.002c-.254-.667-.655-1.296-1.152-1.596l2.129 1.13c.162.368.271.756.322 1.157ZM4.496 14l-2.407-1.279c.039.013.663.22 1.312.22.253 0 .51-.032.737-.117l1.488.79a4.079 4.079 0 0 1-1.13.386Z",
     fill: "#C73622"
   }));
 };
